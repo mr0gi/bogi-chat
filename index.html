@@ -50,7 +50,7 @@ const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:
 let dc;
 let isInitiator = !urlParams.get('room');
 
-const ws = new WebSocket('wss://BURAYI_DEĞİŞTİRECEKSİN.onrender.com'); // Adım 7'den sonra burayı güncelle!
+const ws = new WebSocket('https://bogi-chat.onrender.com'); // Adım 7'den sonra burayı güncelle!
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ type: 'join', room }));
