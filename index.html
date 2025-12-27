@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Retro P2P Chat</title>
+<style>
+  body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; }
+  #chat { border: 2px solid #0f0; padding: 10px; height: 60vh; overflow-y: scroll; background: #001100; margin-bottom: 10px; }
+  .msg { margin: 5px 0; }
+  .you { color: #0f0; }
+  .other { color: #0ff; }
+  input, button { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; font-family: 'Courier New'; }
+  input { width: 70%; }
+  button { width: 28%; }
+  #status { color: #ff0; font-size: 1.2em; }
+</style>
+</head>
+<body>
+<h1>RETRO P2P CHAT</h1>
+<p id="status">Bağlantı kuruluyor...</p>
+
+<div id="createRoom" style="display:none;">
+  <p>Bu linki arkadaşına gönder:</p>
+  <input type="text" id="roomLink" readonly style="width:100%; padding:10px; background:#001100; border:2px solid #0f0; color:#0f0;">
+  <button onclick="copyLink()">Linki Kopyala</button>
+</div>
+
+<div id="chatArea" style="display:none;">
+  <div id="chat"></div>
+  <input type="text" id="message" placeholder="Mesaj yaz... (Enter ile gönder)" onkeypress="if(event.keyCode==13) sendMsg();">
+  <button onclick="sendMsg()">Gönder</button>
+</div>
+
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+let room = urlParams.get('room') || Math.random().toString(36).substring(2, 10);
+if (!urlParams.get('room')) {
+  history.replaceState(null, null, '?room=' + room);
+  document.getElementById('createRoom').style.display = 'block';
+  document.getElementById('roomLink').value = location.href;
+}
+
+function copyLink() {
+  document.getElementById('roomLink').select();
+  document.execCommand('copy');
+  alert('Link kopyalandı!');
+}
+
+const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+let dc;
+let isInitiator = !urlParams.get('room');
+
+const ws = new WebSocket('wss://BURAYI_DEĞİŞTİRECEKSİN.onrender.com'); // Adım 7'den sonra burayı güncelle!
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ type: 'join', room }));
+  document.getElementById('status').textContent = 'Oda hazır, karşı tarafın gelmesini bekliyor...';
+};
+
+ws.onmessage = async e => {
+  const msg = JSON.parse(e.data);
+  if (msg.type === 'offer' && !isInitiator) {
+    await pc.setRemoteDescription(msg.offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type: 'answer', room, answer }));
+  } else if (msg.type === 'answer' && isInitiator) {
+    await pc.setRemoteDescription(msg.answer);
+  } else if (msg.type === 'candidate') {
+    if (msg.candidate) await pc.addIceCandidate(msg.candidate);
+  }
+};
+
+pc.onicecandidate = e => {
+  if (e.candidate) {
+    ws.send(JSON.stringify({ type: 'candidate', room, candidate: e.candidate }));
+  }
+};
+
+pc.ondatachannel = e => {
+  dc = e.channel;
+  setupDataChannel();
+};
+
+if (isInitiator) {
+  dc = pc.createDataChannel('chat');
+  setupDataChannel();
+  pc.createOffer()
+    .then(offer => pc.setLocalDescription(offer))
+    .then(() => {
+      ws.send(JSON.stringify({ type: 'offer', room, offer: pc.localDescription }));
+    });
+}
+
+function setupDataChannel() {
+  dc.onmessage = e => {
+    let div = document.createElement('div');
+    div.className = 'msg other';
+    div.textContent = 'Karşı taraf: ' + e.data;
+    document.getElementById('chat').appendChild(div);
+    document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+  };
+
+  dc.onopen = () => {
+    document.getElementById('status').textContent = 'BAĞLANDI! Artık mesajlaşabilirsiniz.';
+    document.getElementById('chatArea').style.display = 'block';
+  };
+}
+
+function sendMsg() {
+  let msg = document.getElementById('message').value.trim();
+  if (msg && dc && dc.readyState === 'open') {
+    dc.send(msg);
+    let div = document.createElement('div');
+    div.className = 'msg you';
+    div.textContent = 'Sen: ' + msg;
+    document.getElementById('chat').appendChild(div);
+    document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+    document.getElementById('message').value = '';
+  }
+}
+</script>
+</body>
+</html>
