@@ -20,7 +20,7 @@
 <body>
 <div id="nickScreen">
   <h1>RETRO CHAT</h1>
-  <p>Kullanıcı adını gir</p>
+  <p>Nickini gir (sadece 2 kişi girebilir)</p>
   <input type="text" id="nickInput" placeholder="Nickin..." maxlength="20">
   <br><br>
   <button onclick="startChat()">Giriş Yap</button>
@@ -37,114 +37,114 @@
 <script>
 let nick = '';
 let dc = null;
+let pc = null;
 let channel = null;
-const pusher = new Pusher('402b381f5f24c1c5764b', {
-  cluster: 'eu',
-  encrypted: true
+
+const pusher = new Pusher('B402b381f5f24c1c5764b', {  // <-- Burayı kendi key'inle değiştir!
+  cluster: 'eu',  // örneğin 'eu'
+  forceTLS: true
 });
 
 function startChat() {
   nick = document.getElementById('nickInput').value.trim();
   if (!nick) {
-    alert('Bir nick gir!');
+    alert('Nick gir!');
     return;
   }
 
   document.getElementById('nickScreen').style.display = 'none';
   document.getElementById('chatScreen').style.display = 'block';
-  document.getElementById('status').textContent = 'Bağlantı kuruluyor...';
 
-  channel = pusher.subscribe('retro-chat');
-  channel.bind('signal', handleSignal);
-  channel.bind('message', handleMessage);
+  // Tek global private kanal kullanıyoruz
+  channel = pusher.subscribe('private-retro-chat');
 
-  // Bağlantı kurmak için signaling başlat
-  startSignaling();
+  channel.bind('pusher:subscription_succeeded', () => {
+    const members = channel.members;
+    if (members.count > 2) {
+      document.getElementById('status').textContent = 'Oda dolu! Başka zaman dene.';
+      return;
+    }
+
+    document.getElementById('status').textContent = members.count === 1 ? 'Karşı tarafı bekliyor...' : 'Bağlandı! Mesajlaşabilirsiniz.';
+
+    if (members.count === 1) {
+      // İlk kişi: offer oluştur
+      startWebRTC(true);
+    }
+  });
+
+  channel.bind('pusher:subscription_error', (err) => {
+    document.getElementById('status').textContent = 'Bağlantı hatası: ' + err.error;
+  });
+
+  // Signaling mesajlarını al
+  channel.bind('client-signal', (data) => {
+    handleSignal(data);
+  });
 }
 
-function startSignaling() {
-  // Basit signaling: İlk giren offer oluşturur, ikinci giren answer verir
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+function startWebRTC(isInitiator) {
+  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
-  pc.onicecandidate = e => {
+  pc.onicecandidate = (e) => {
     if (e.candidate) {
       channel.trigger('client-signal', { type: 'candidate', candidate: e.candidate });
     }
   };
 
-  pc.ontrack = e => console.log('Track geldi');
-
-  pc.ondatachannel = e => {
-    dc = e.channel;
+  if (isInitiator) {
+    dc = pc.createDataChannel('chat');
     setupDataChannel();
-  };
-
-  // İki kişi kontrolü: İlk giren offer yaratır
-  channel.bind('pusher:subscription_succeeded', () => {
-    if (channel.members.count === 1) {
-      // İlk kişi offer yaratır
-      dc = pc.createDataChannel('chat');
+    pc.createOffer()
+      .then(offer => pc.setLocalDescription(offer))
+      .then(() => channel.trigger('client-signal', { type: 'offer', sdp: pc.localDescription }));
+  } else {
+    pc.ondatachannel = (e) => {
+      dc = e.channel;
       setupDataChannel();
-      pc.createOffer()
-        .then(offer => pc.setLocalDescription(offer))
-        .then(() => {
-          channel.trigger('client-signal', { type: 'offer', offer: pc.localDescription });
-        });
-    } else {
-      document.getElementById('status').textContent = 'Karşı taraf bağlandı!';
-    }
-  });
-
-  function setupDataChannel() {
-    dc.onmessage = e => {
-      let div = document.createElement('div');
-      div.className = 'msg other';
-      div.textContent = e.data;
-      document.getElementById('chat').appendChild(div);
-      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-    };
-    dc.onopen = () => {
-      document.getElementById('status').textContent = 'BAĞLANDI! Mesajlaşmaya başla.';
     };
   }
+}
 
-  function handleSignal(data) {
-    if (data.type === 'offer') {
-      pc.setRemoteDescription(data.offer)
-        .then(() => pc.createAnswer())
-        .then(answer => pc.setLocalDescription(answer))
-        .then(() => channel.trigger('client-signal', { type: 'answer', answer: pc.localDescription }));
-    } else if (data.type === 'answer') {
-      pc.setRemoteDescription(data.answer);
-    } else if (data.type === 'candidate') {
-      pc.addIceCandidate(data.candidate);
-    }
+function handleSignal(data) {
+  if (data.type === 'offer') {
+    startWebRTC(false);
+    pc.setRemoteDescription(data.sdp)
+      .then(() => pc.createAnswer())
+      .then(answer => pc.setLocalDescription(answer))
+      .then(() => channel.trigger('client-signal', { type: 'answer', sdp: pc.localDescription }));
+  } else if (data.type === 'answer') {
+    pc.setRemoteDescription(data.sdp);
+  } else if (data.type === 'candidate') {
+    pc.addIceCandidate(data.candidate);
   }
+}
 
-  function handleMessage(data) {
-    let div = document.createElement('div');
-    div.className = 'msg other';
-    div.textContent = data.nick + ': ' + data.text;
-    document.getElementById('chat').appendChild(div);
-    document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-  }
-
-  // Mesaj gönderme
-  window.sendMsg = function() {
-    let msg = document.getElementById('message').value.trim();
-    if (msg && dc && dc.readyState === 'open') {
-      dc.send(nick + ': ' + msg);
-      let div = document.createElement('div');
-      div.className = 'msg you';
-      div.textContent = nick + ': ' + msg;
-      document.getElementById('chat').appendChild(div);
-      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-      document.getElementById('message').value = '';
-    } else if (msg) {
-      // Eğer P2P çalışmazsa fallback (Pusher üzerinden)
-      channel.trigger('client-message', { nick, text: msg });
-    }
+function setupDataChannel() {
+  dc.onopen = () => {
+    document.getElementById('status').textContent = 'BAĞLANDI! Mesajlaşabilirsiniz.';
   };
+
+  dc.onmessage = (e) => {
+    addMessage('other', e.data);
+  };
+}
+
+function addMessage(type, text) {
+  let div = document.createElement('div');
+  div.className = 'msg ' + type;
+  div.textContent = text;
+  document.getElementById('chat').appendChild(div);
+  document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+}
+
+function sendMsg() {
+  let msg = document.getElementById('message').value.trim();
+  if (msg && dc && dc.readyState === 'open') {
+    dc.send(nick + ': ' + msg);
+    addMessage('you', nick + ': ' + msg);
+    document.getElementById('message').value = '';
+  }
 }
 </script>
 </body>
