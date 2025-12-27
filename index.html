@@ -2,136 +2,131 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>RETRO CHAT</title>
+<title>Retro P2P Chat</title>
 <style>
   body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; margin: 0; }
-  #nickScreen { text-align: center; margin-top: 100px; }
-  #nickInput { background: #001100; color: #0f0; border: 2px solid #0f0; padding: 10px; width: 300px; font-size: 1.2em; }
-  #chatScreen { display: none; }
-  #chat { border: 2px solid #0f0; padding: 15px; height: 70vh; overflow-y: scroll; background: #001100; margin-bottom: 10px; }
+  h1 { text-align: center; }
+  #setup { text-align: center; margin: 50px; }
+  textarea, input, button { 
+    background: #001100; color: #0f0; border: 2px solid #0f0; 
+    padding: 10px; font-family: 'Courier New'; font-size: 1em; 
+  }
+  textarea { width: 80%; height: 150px; }
+  input { width: 80%; margin: 10px 0; }
+  button { width: 40%; margin: 10px; cursor: pointer; }
+  #chatArea { display: none; text-align: left; }
+  #chat { border: 2px solid #0f0; padding: 15px; height: 65vh; overflow-y: scroll; background: #001100; margin-bottom: 10px; }
   .msg { margin: 8px 0; }
   .you { color: #0f0; }
   .other { color: #0ff; }
-  #message { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; width: 70%; }
-  #send { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; width: 28%; }
-  #status { color: #ff0; font-size: 1.2em; margin-bottom: 10px; }
+  #message { width: 70%; }
+  #sendBtn { width: 28%; }
+  #status { color: #ff0; text-align: center; font-size: 1.2em; }
 </style>
 </head>
 <body>
-<div id="nickScreen">
-  <h1>RETRO CHAT</h1>
-  <p>Nickini gir (sadece 2 kişi girebilir)</p>
-  <input type="text" id="nickInput" placeholder="Nickin..." maxlength="20">
-  <br><br>
-  <button onclick="startChat()">Giriş Yap</button>
+<h1>RETRO P2P CHAT</h1>
+
+<div id="setup">
+  <p><strong>Nickini gir:</strong></p>
+  <input type="text" id="nick" placeholder="Nickin..." maxlength="20">
+  
+  <p style="margin-top:30px;"><strong>1. kişiysen:</strong> Bağlantı kodunu oluştur</p>
+  <button onclick="createOffer()">Bağlantı Kodunu Oluştur</button>
+  
+  <p style="margin-top:30px;"><strong>2. kişiysen:</strong> Arkadaşından gelen kodu buraya yapıştır</p>
+  <textarea id="remoteCode" placeholder="Kodu buraya yapıştır..."></textarea>
+  <br>
+  <button onclick="pasteAnswer()">Kodu Yapıştır ve Bağlan</button>
 </div>
 
-<div id="chatScreen">
+<div id="chatArea">
   <p id="status">Bağlanıyor...</p>
   <div id="chat"></div>
-  <input type="text" id="message" placeholder="Mesaj yaz... (Enter ile gönder)" onkeypress="if(event.keyCode==13) sendMsg();">
-  <button id="send" onclick="sendMsg()">Gönder</button>
+  <input type="text" id="message" placeholder="Mesaj yaz... (Enter ile gönder)" onkeypress="if(event.key===13) sendMsg();">
+  <button id="sendBtn" onclick="sendMsg()">Gönder</button>
 </div>
 
-<script src="https://js.pusher.com/8.2/pusher.min.js"></script>
 <script>
-let nick = '';
-let dc = null;
 let pc = null;
-let channel = null;
+let dc = null;
+let myNick = '';
 
-const pusher = new Pusher('B402b381f5f24c1c5764b', {  // <-- Burayı kendi key'inle değiştir!
-  cluster: 'eu',  // örneğin 'eu'
-  forceTLS: true
-});
+function createOffer() {
+  myNick = document.getElementById('nick').value.trim() || 'Kişi1';
+  if (!myNick) { alert('Nick gir!'); return; }
 
-function startChat() {
-  nick = document.getElementById('nickInput').value.trim();
-  if (!nick) {
-    alert('Nick gir!');
-    return;
-  }
+  initPC();
+  dc = pc.createDataChannel('chat');
+  setupDataChannel();
 
-  document.getElementById('nickScreen').style.display = 'none';
-  document.getElementById('chatScreen').style.display = 'block';
-
-  // Tek global private kanal kullanıyoruz
-  channel = pusher.subscribe('private-retro-chat');
-
-  channel.bind('pusher:subscription_succeeded', () => {
-    const members = channel.members;
-    if (members.count > 2) {
-      document.getElementById('status').textContent = 'Oda dolu! Başka zaman dene.';
-      return;
-    }
-
-    document.getElementById('status').textContent = members.count === 1 ? 'Karşı tarafı bekliyor...' : 'Bağlandı! Mesajlaşabilirsiniz.';
-
-    if (members.count === 1) {
-      // İlk kişi: offer oluştur
-      startWebRTC(true);
-    }
-  });
-
-  channel.bind('pusher:subscription_error', (err) => {
-    document.getElementById('status').textContent = 'Bağlantı hatası: ' + err.error;
-  });
-
-  // Signaling mesajlarını al
-  channel.bind('client-signal', (data) => {
-    handleSignal(data);
-  });
+  pc.createOffer()
+    .then(offer => pc.setLocalDescription(offer))
+    .then(() => {
+      setTimeout(() => {  // ICE gathering bitene kadar bekle
+        const code = btoa(JSON.stringify(pc.localDescription));
+        document.getElementById('remoteCode').value = code;
+        alert('Bu kodu arkadaşına gönder:\n\n' + code + '\n\n(Kopyalamak için kutuya uzun basabilirsin)');
+        document.getElementById('status').textContent = 'Kod oluşturuldu! Karşı tarafın yapıştırmasını bekle...';
+        document.getElementById('chatArea').style.display = 'block';
+        document.getElementById('setup').style.display = 'none';
+      }, 1000);
+    });
 }
 
-function startWebRTC(isInitiator) {
-  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+function pasteAnswer() {
+  myNick = document.getElementById('nick').value.trim() || 'Kişi2';
+  if (!myNick) { alert('Nick gir!'); return; }
 
-  pc.onicecandidate = (e) => {
-    if (e.candidate) {
-      channel.trigger('client-signal', { type: 'candidate', candidate: e.candidate });
+  const code = document.getElementById('remoteCode').value.trim();
+  if (!code) { alert('Kod yapıştır!'); return; }
+
+  initPC();
+  const sdp = JSON.parse(atob(code));
+
+  pc.setRemoteDescription(sdp)
+    .then(() => pc.createAnswer())
+    .then(answer => pc.setLocalDescription(answer))
+    .then(() => {
+      setTimeout(() => {
+        const answerCode = btoa(JSON.stringify(pc.localDescription));
+        alert('Şimdi bu kodu 1. kişiye geri gönder:\n\n' + answerCode);
+      }, 1000);
+    });
+
+  pc.ondatachannel = e => {
+    dc = e.channel;
+    setupDataChannel();
+  };
+}
+
+function initPC() {
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+
+  pc.onicecandidate = e => {
+    if (e.candidate === null && pc.localDescription) {
+      // Tamamlanmış SDP'yi güncelle (gerekirse)
     }
   };
 
-  if (isInitiator) {
-    dc = pc.createDataChannel('chat');
-    setupDataChannel();
-    pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer))
-      .then(() => channel.trigger('client-signal', { type: 'offer', sdp: pc.localDescription }));
-  } else {
-    pc.ondatachannel = (e) => {
-      dc = e.channel;
-      setupDataChannel();
-    };
-  }
-}
-
-function handleSignal(data) {
-  if (data.type === 'offer') {
-    startWebRTC(false);
-    pc.setRemoteDescription(data.sdp)
-      .then(() => pc.createAnswer())
-      .then(answer => pc.setLocalDescription(answer))
-      .then(() => channel.trigger('client-signal', { type: 'answer', sdp: pc.localDescription }));
-  } else if (data.type === 'answer') {
-    pc.setRemoteDescription(data.sdp);
-  } else if (data.type === 'candidate') {
-    pc.addIceCandidate(data.candidate);
-  }
+  document.getElementById('chatArea').style.display = 'block';
+  document.getElementById('setup').style.display = 'none';
 }
 
 function setupDataChannel() {
   dc.onopen = () => {
-    document.getElementById('status').textContent = 'BAĞLANDI! Mesajlaşabilirsiniz.';
+    document.getElementById('status').textContent = 'BAĞLANDI! Artık mesajlaşabilirsiniz.';
   };
 
-  dc.onmessage = (e) => {
+  dc.onmessage = e => {
     addMessage('other', e.data);
   };
 }
 
 function addMessage(type, text) {
-  let div = document.createElement('div');
+  const div = document.createElement('div');
   div.className = 'msg ' + type;
   div.textContent = text;
   document.getElementById('chat').appendChild(div);
@@ -139,11 +134,13 @@ function addMessage(type, text) {
 }
 
 function sendMsg() {
-  let msg = document.getElementById('message').value.trim();
+  const msgInput = document.getElementById('message');
+  const msg = msgInput.value.trim();
   if (msg && dc && dc.readyState === 'open') {
-    dc.send(nick + ': ' + msg);
-    addMessage('you', nick + ': ' + msg);
-    document.getElementById('message').value = '';
+    const fullMsg = myNick + ': ' + msg;
+    dc.send(fullMsg);
+    addMessage('you', fullMsg);
+    msgInput.value = '';
   }
 }
 </script>
