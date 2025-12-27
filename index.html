@@ -2,122 +2,149 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>Retro P2P Chat</title>
+<title>RETRO CHAT</title>
 <style>
-  body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; }
-  #chat { border: 2px solid #0f0; padding: 10px; height: 60vh; overflow-y: scroll; background: #001100; margin-bottom: 10px; }
-  .msg { margin: 5px 0; }
+  body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; margin: 0; }
+  #nickScreen { text-align: center; margin-top: 100px; }
+  #nickInput { background: #001100; color: #0f0; border: 2px solid #0f0; padding: 10px; width: 300px; font-size: 1.2em; }
+  #chatScreen { display: none; }
+  #chat { border: 2px solid #0f0; padding: 15px; height: 70vh; overflow-y: scroll; background: #001100; margin-bottom: 10px; }
+  .msg { margin: 8px 0; }
   .you { color: #0f0; }
   .other { color: #0ff; }
-  input, button { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; font-family: 'Courier New'; }
-  input { width: 70%; }
-  button { width: 28%; }
-  #status { color: #ff0; font-size: 1.2em; }
+  #message { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; width: 70%; }
+  #send { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; width: 28%; }
+  #status { color: #ff0; font-size: 1.2em; margin-bottom: 10px; }
 </style>
 </head>
 <body>
-<h1>RETRO P2P CHAT</h1>
-<p id="status">Bağlantı kuruluyor...</p>
-
-<div id="createRoom" style="display:none;">
-  <p>Bu linki arkadaşına gönder:</p>
-  <input type="text" id="roomLink" readonly style="width:100%; padding:10px; background:#001100; border:2px solid #0f0; color:#0f0;">
-  <button onclick="copyLink()">Linki Kopyala</button>
+<div id="nickScreen">
+  <h1>RETRO CHAT</h1>
+  <p>Kullanıcı adını gir</p>
+  <input type="text" id="nickInput" placeholder="Nickin..." maxlength="20">
+  <br><br>
+  <button onclick="startChat()">Giriş Yap</button>
 </div>
 
-<div id="chatArea" style="display:none;">
+<div id="chatScreen">
+  <p id="status">Bağlanıyor...</p>
   <div id="chat"></div>
   <input type="text" id="message" placeholder="Mesaj yaz... (Enter ile gönder)" onkeypress="if(event.keyCode==13) sendMsg();">
-  <button onclick="sendMsg()">Gönder</button>
+  <button id="send" onclick="sendMsg()">Gönder</button>
 </div>
 
+<script src="https://js.pusher.com/8.2/pusher.min.js"></script>
 <script>
-const urlParams = new URLSearchParams(window.location.search);
-let room = urlParams.get('room') || Math.random().toString(36).substring(2, 10);
-if (!urlParams.get('room')) {
-  history.replaceState(null, null, '?room=' + room);
-  document.getElementById('createRoom').style.display = 'block';
-  document.getElementById('roomLink').value = location.href;
-}
+let nick = '';
+let dc = null;
+let channel = null;
+const pusher = new Pusher('BURAYA_KEY_GELCEK', {
+  cluster: 'BURAYA_CLUSTER_GELCEK',
+  encrypted: true
+});
 
-function copyLink() {
-  document.getElementById('roomLink').select();
-  document.execCommand('copy');
-  alert('Link kopyalandı!');
-}
-
-const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-let dc;
-let isInitiator = !urlParams.get('room');
-
-const ws = new WebSocket('https://bogi-chat.onrender.com'); // Adım 7'den sonra burayı güncelle!
-
-ws.onopen = () => {
-  ws.send(JSON.stringify({ type: 'join', room }));
-  document.getElementById('status').textContent = 'Oda hazır, karşı tarafın gelmesini bekliyor...';
-};
-
-ws.onmessage = async e => {
-  const msg = JSON.parse(e.data);
-  if (msg.type === 'offer' && !isInitiator) {
-    await pc.setRemoteDescription(msg.offer);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', room, answer }));
-  } else if (msg.type === 'answer' && isInitiator) {
-    await pc.setRemoteDescription(msg.answer);
-  } else if (msg.type === 'candidate') {
-    if (msg.candidate) await pc.addIceCandidate(msg.candidate);
+function startChat() {
+  nick = document.getElementById('nickInput').value.trim();
+  if (!nick) {
+    alert('Bir nick gir!');
+    return;
   }
-};
 
-pc.onicecandidate = e => {
-  if (e.candidate) {
-    ws.send(JSON.stringify({ type: 'candidate', room, candidate: e.candidate }));
-  }
-};
+  document.getElementById('nickScreen').style.display = 'none';
+  document.getElementById('chatScreen').style.display = 'block';
+  document.getElementById('status').textContent = 'Bağlantı kuruluyor...';
 
-pc.ondatachannel = e => {
-  dc = e.channel;
-  setupDataChannel();
-};
+  channel = pusher.subscribe('retro-chat');
+  channel.bind('signal', handleSignal);
+  channel.bind('message', handleMessage);
 
-if (isInitiator) {
-  dc = pc.createDataChannel('chat');
-  setupDataChannel();
-  pc.createOffer()
-    .then(offer => pc.setLocalDescription(offer))
-    .then(() => {
-      ws.send(JSON.stringify({ type: 'offer', room, offer: pc.localDescription }));
-    });
+  // Bağlantı kurmak için signaling başlat
+  startSignaling();
 }
 
-function setupDataChannel() {
-  dc.onmessage = e => {
+function startSignaling() {
+  // Basit signaling: İlk giren offer oluşturur, ikinci giren answer verir
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+  pc.onicecandidate = e => {
+    if (e.candidate) {
+      channel.trigger('client-signal', { type: 'candidate', candidate: e.candidate });
+    }
+  };
+
+  pc.ontrack = e => console.log('Track geldi');
+
+  pc.ondatachannel = e => {
+    dc = e.channel;
+    setupDataChannel();
+  };
+
+  // İki kişi kontrolü: İlk giren offer yaratır
+  channel.bind('pusher:subscription_succeeded', () => {
+    if (channel.members.count === 1) {
+      // İlk kişi offer yaratır
+      dc = pc.createDataChannel('chat');
+      setupDataChannel();
+      pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .then(() => {
+          channel.trigger('client-signal', { type: 'offer', offer: pc.localDescription });
+        });
+    } else {
+      document.getElementById('status').textContent = 'Karşı taraf bağlandı!';
+    }
+  });
+
+  function setupDataChannel() {
+    dc.onmessage = e => {
+      let div = document.createElement('div');
+      div.className = 'msg other';
+      div.textContent = e.data;
+      document.getElementById('chat').appendChild(div);
+      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+    };
+    dc.onopen = () => {
+      document.getElementById('status').textContent = 'BAĞLANDI! Mesajlaşmaya başla.';
+    };
+  }
+
+  function handleSignal(data) {
+    if (data.type === 'offer') {
+      pc.setRemoteDescription(data.offer)
+        .then(() => pc.createAnswer())
+        .then(answer => pc.setLocalDescription(answer))
+        .then(() => channel.trigger('client-signal', { type: 'answer', answer: pc.localDescription }));
+    } else if (data.type === 'answer') {
+      pc.setRemoteDescription(data.answer);
+    } else if (data.type === 'candidate') {
+      pc.addIceCandidate(data.candidate);
+    }
+  }
+
+  function handleMessage(data) {
     let div = document.createElement('div');
     div.className = 'msg other';
-    div.textContent = 'Karşı taraf: ' + e.data;
+    div.textContent = data.nick + ': ' + data.text;
     document.getElementById('chat').appendChild(div);
     document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-  };
-
-  dc.onopen = () => {
-    document.getElementById('status').textContent = 'BAĞLANDI! Artık mesajlaşabilirsiniz.';
-    document.getElementById('chatArea').style.display = 'block';
-  };
-}
-
-function sendMsg() {
-  let msg = document.getElementById('message').value.trim();
-  if (msg && dc && dc.readyState === 'open') {
-    dc.send(msg);
-    let div = document.createElement('div');
-    div.className = 'msg you';
-    div.textContent = 'Sen: ' + msg;
-    document.getElementById('chat').appendChild(div);
-    document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-    document.getElementById('message').value = '';
   }
+
+  // Mesaj gönderme
+  window.sendMsg = function() {
+    let msg = document.getElementById('message').value.trim();
+    if (msg && dc && dc.readyState === 'open') {
+      dc.send(nick + ': ' + msg);
+      let div = document.createElement('div');
+      div.className = 'msg you';
+      div.textContent = nick + ': ' + msg;
+      document.getElementById('chat').appendChild(div);
+      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+      document.getElementById('message').value = '';
+    } else if (msg) {
+      // Eğer P2P çalışmazsa fallback (Pusher üzerinden)
+      channel.trigger('client-message', { nick, text: msg });
+    }
+  };
 }
 </script>
 </body>
